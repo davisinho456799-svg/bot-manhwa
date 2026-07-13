@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "start": "node bot-CORRIGIDO (1).mjs"
+    "start": "node bot-CORRIGIDO.mjs"
   },
   "devDependencies": {
     "@types/node": "^26.1.1",
