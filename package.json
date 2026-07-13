@@ -1,0 +1,19 @@
+{
+  "name": "manhwa-bot",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "bot-CORRIGIDO.mjs",
+  "scripts": {
+    "start": "node bot-CORRIGIDO.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "drizzle-orm": "^0.38.3",
+    "pg": "^8.13.1",
+    "pino": "^9.6.0",
+    "pino-pretty": "^13.0.0"
+  }
+}
