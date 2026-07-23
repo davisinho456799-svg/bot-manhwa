@@ -1628,7 +1628,7 @@ const cmdGuia = {
         { name: '🎭 /indicar', value: 'Recomenda manhwas com base em **até 5 gêneros** escolhidos.', inline: false },
         { name: '🎲 /surpresa', value: 'Retorna um **manhwa aleatório** bem avaliado.', inline: false },
         { name: '📡 /novidades', value: 'Lista os manhwas mais populares **em lançamento**.', inline: false },
-        { name: '❤️ /curtidas adicionar/listar/remover', value: 'Gerencia sua lista de manhwas favoritos.', inline: false },
+        { name: '❤️ /favorito adicionar manhwa | anime', value: 'Gerencia sua lista de favoritos (manhwa e anime).', inline: false },
         { name: '⚔️ /versus <manhwa1> <manhwa2>', value: 'Compara dois manhwas lado a lado.', inline: false },
         { name: '✍️ /criador <nome>', value: 'Busca um autor e lista toda a obra dele.', inline: false },
         { name: '🔔 /alertas canal/status/desativar', value: 'Configura notificações de novos capítulos.', inline: false },
@@ -1831,7 +1831,7 @@ const cmdNovidades = {
 
         if (available.length === 1) {
           await doInsert(available[0]);
-          await interaction.editReply({ content: `✅ **${available[0].mainTitle}** adicionado aos seus favoritos!` });
+          await interaction.editReply({ content: `✅ **${available[0].mainTitle}** adicionado aos seus favoritos!\n> 🔔 O bot verifica novos ${tipo === 'anime' ? 'episódios' : 'capítulos'} automaticamente a cada **2 horas**.` });
           return;
         }
         const options = available.slice(0, 8).map(r => ({
@@ -1860,7 +1860,7 @@ const cmdNovidades = {
           const chosen = detail ?? available.find(r => String(r.id) === selIdParts.join(':'));
           if (!chosen) { await interaction.editReply({ content: '❌ Erro ao obter detalhes.', components: [] }); return; }
           await doInsert(chosen);
-          await interaction.editReply({ content: `✅ **${chosen.mainTitle}** adicionado aos seus favoritos!`, components: [] });
+          await interaction.editReply({ content: `✅ **${chosen.mainTitle}** adicionado aos seus favoritos!\n> 🔔 O bot verifica novos ${tipo === 'anime' ? 'episódios' : 'capítulos'} automaticamente a cada **2 horas**.`, components: [] });
         });
         collector?.on('end', async (_c, reason) => {
           if (reason === 'time') await interaction.editReply({ content: '⏱️ Tempo esgotado.', components: [] });
@@ -2049,7 +2049,7 @@ const cmdAlertas = {
       await db.insert(notificacaoCanaisTable).values({ guildId: interaction.guildId, channelId: canal.id }).onConflictDoUpdate({
         target: notificacaoCanaisTable.guildId, set: { channelId: canal.id, configuredAt: new Date() },
       });
-      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🔔 Notificações Configuradas!').setColor(3066993).setDescription(`O bot vai avisar em ${canal} sempre que um manhwa da lista de favoritos de alguém tiver **novos capítulos**.\n\n> ✅ A verificação acontece automaticamente a cada **2 horas**.\n> ✅ Somente manhwas marcados como favoritos com status "Em lançamento" são monitorados.\n> ✅ Cada manhwa só gera uma notificação por atualização de capítulo.`).setFooter({ text: 'Use /alertas desativar para parar as notificações' })] });
+      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle('🔔 Notificações Configuradas!').setColor(3066993).setDescription(`O bot vai avisar em ${canal} sempre que um título da lista de favoritos tiver **novos capítulos ou episódios**.\n\n> ✅ A verificação acontece automaticamente a cada **2 horas**.\n> ✅ Manhwas e animes marcados como favoritos são monitorados.\n> ✅ Cada título só gera uma notificação por atualização de capítulo/episódio.`).setFooter({ text: 'Use /alertas desativar para parar as notificações' })] });
     } else if (sub === 'status') {
       if (!interaction.guildId) { await interaction.reply({ content: '❌ Este comando só pode ser usado em servidores.', ephemeral: true }); return; }
       await interaction.deferReply({ ephemeral: true });
@@ -2183,7 +2183,7 @@ const cmdPopulares = {
       coverUrl: favoritosTable.coverUrl, genres: favoritosTable.genres, score: favoritosTable.score,
       total: sql`cast(count(*) as int)`,
     }).from(favoritosTable).groupBy(favoritosTable.manhwaId, favoritosTable.title, favoritosTable.siteUrl, favoritosTable.coverUrl, favoritosTable.genres, favoritosTable.score).orderBy(sql`count(*) desc`).limit(10);
-    if (!rows.length) { await interaction.editReply('📭 Ainda ninguém adicionou favoritos. Use `/curtidas adicionar` para começar!'); return; }
+    if (!rows.length) { await interaction.editReply('📭 Ainda ninguém adicionou favoritos. Use `/favorito adicionar manhwa` para começar!'); return; }
     const medals = ['🥇', '🥈', '🥉'];
     const lines = rows.map((r, i) => {
       const medal = medals[i] ?? `**${i + 1}.**`;
