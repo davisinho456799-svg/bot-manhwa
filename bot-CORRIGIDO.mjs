@@ -1710,96 +1710,204 @@ const cmdNovidades = {
   },
 };
 
-// /curtidas — favoritos
-const cmdCurtidas = {
-  data: new SlashCommandBuilder().setName('curtidas').setDescription('Gerencie sua lista de manhwas favoritos')
-    .addSubcommand(sub => sub.setName('adicionar').setDescription('Adiciona um manhwa aos seus favoritos')
-      .addStringOption(o => o.setName('titulo').setDescription('Nome do manhwa').setRequired(true)))
-    .addSubcommand(sub => sub.setName('listar').setDescription('Mostra sua lista de manhwas favoritos'))
-    .addSubcommand(sub => sub.setName('remover').setDescription('Remove um manhwa dos seus favoritos')
-      .addStringOption(o => o.setName('titulo').setDescription('Nome ou parte do título').setRequired(true))),
-  async execute(interaction) {
-    const sub = interaction.options.getSubcommand();
-    if (sub === 'listar') {
-      await interaction.deferReply({ ephemeral: true });
-      const userId = interaction.user.id;
-      const lista = await db.select().from(favoritosTable).where(eq(favoritosTable.discordUserId, userId)).orderBy(favoritosTable.addedAt);
-      if (!lista.length) { await interaction.editReply({ content: '📭 Você ainda não tem nenhum favorito! Use `/curtidas adicionar` para começar.' }); return; }
-      const lines = lista.map((fav, i) => {
-        const score = fav.score ? `⭐ ${fav.score}` : '⭐ N/A';
-        const genres = fav.genres ? fav.genres.split(',').slice(0, 2).join(', ') : '—';
-        const src = fav.source === 'anilist' ? '🟣' : '🟠';
-        return `**${i + 1}.** ${src} [${fav.title}](${fav.siteUrl}) — ${score}\n> 🏷️ ${genres}`;
-      });
-      await interaction.editReply({ embeds: [new EmbedBuilder().setTitle(`⭐ Favoritos de ${interaction.user.displayName}`).setDescription(lines.join('\n\n')).setColor(15844367).setFooter({ text: `${lista.length} manhwa(s) na lista` })] });
-    } else if (sub === 'adicionar') {
-      const titulo = interaction.options.getString('titulo', true);
-      await interaction.deferReply({ ephemeral: true });
-      let results;
-      try { results = await searchAllSources(titulo); }
-      catch { await interaction.editReply('❌ Erro ao buscar o manhwa. Tente novamente.'); return; }
-      if (!results.length) { await interaction.editReply(`❌ Nenhum manhwa encontrado para **${titulo}**.`); return; }
-      const userId = interaction.user.id;
-      const existingIds = new Set(
-        (await db.select({ manhwaId: favoritosTable.manhwaId }).from(favoritosTable).where(eq(favoritosTable.discordUserId, userId))).map(r => r.manhwaId)
-      );
-      const available = results.filter(r => !existingIds.has(r.id));
-      if (!available.length) { await interaction.editReply('⚠️ Todos os resultados já estão nos seus favoritos!'); return; }
-      const insertFav = async m => db.insert(favoritosTable).values({ discordUserId: userId, manhwaId: m.id, source: m.source, title: m.mainTitle, coverUrl: m.coverUrl, siteUrl: m.siteUrl, genres: m.genres.join(','), score: m.score ? (m.score / 10).toFixed(1) : null });
-      if (available.length === 1) {
-        await insertFav(available[0]);
-        await interaction.editReply({ content: `✅ **${available[0].mainTitle}** adicionado aos seus favoritos!` }); return;
-      }
-      const options = available.slice(0, 8).map(r => ({
-        label: r.mainTitle.slice(0, 100),
-        description: `${SOURCE_ICONS[r.source] ?? '🔵'} ${SOURCE_LABELS[r.source] ?? r.source} • ${r.genres.slice(0, 2).join(', ') || 'Sem gêneros'}`.slice(0, 100),
-        value: `${r.source}:${r.id}`,
-      }));
-      const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('fav_add_select').setPlaceholder('Selecione o manhwa para adicionar').addOptions(options));
-      await interaction.editReply({ content: `🔍 Encontrei **${available.length}** resultados para **${titulo}**. Selecione qual adicionar:`, components: [row] });
-      const collector = interaction.channel?.createMessageComponentCollector({
-        componentType: ComponentType.StringSelect, filter: i => i.customId === 'fav_add_select' && i.user.id === interaction.user.id, time: 30000, max: 1,
-      });
-      collector?.on('collect', async sel => {
-        await sel.deferUpdate();
-        const ci = sel.values[0].indexOf(':');
-        const src = sel.values[0].slice(0, ci), id = sel.values[0].slice(ci + 1);
-        const m = available.find(r => r.source === src && r.id === id);
-        if (!m) { await interaction.editReply({ content: '❌ Erro ao selecionar. Tente novamente.', components: [] }); return; }
-        await insertFav(m);
-        await interaction.editReply({ content: `✅ **${m.mainTitle}** adicionado aos seus favoritos!`, components: [] });
-      });
-      collector?.on('end', async (_c, reason) => { if (reason === 'time') await interaction.editReply({ content: '⏱️ Tempo esgotado.', components: [] }); });
-    } else {
-      const titulo = interaction.options.getString('titulo', true).toLowerCase();
-      await interaction.deferReply({ ephemeral: true });
-      const userId = interaction.user.id;
-      const lista = await db.select().from(favoritosTable).where(eq(favoritosTable.discordUserId, userId));
-      const matches = lista.filter(f => f.title.toLowerCase().includes(titulo));
-      if (!matches.length) { await interaction.editReply(`❌ Nenhum favorito encontrado com **${titulo}**.`); return; }
-      if (matches.length === 1) {
-        await db.delete(favoritosTable).where(and(eq(favoritosTable.discordUserId, userId), eq(favoritosTable.id, matches[0].id)));
-        await interaction.editReply(`🗑️ **${matches[0].title}** removido dos seus favoritos.`); return;
-      }
-      const options = matches.slice(0, 8).map(f => ({ label: f.title.slice(0, 100), description: `${(f.genres ?? '').split(',').slice(0, 2).join(', ') || 'Sem gêneros'}`.slice(0, 100), value: String(f.id) }));
-      const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('fav_remove_select').setPlaceholder('Selecione qual remover').addOptions(options));
-      await interaction.editReply({ content: `⚠️ Encontrei **${matches.length}** favoritos com esse nome. Qual remover?`, components: [row] });
-      const collector = interaction.channel?.createMessageComponentCollector({
-        componentType: ComponentType.StringSelect, filter: i => i.customId === 'fav_remove_select' && i.user.id === interaction.user.id, time: 30000, max: 1,
-      });
-      collector?.on('collect', async sel => {
-        await sel.deferUpdate();
-        const favId = parseInt(sel.values[0], 10);
-        const fav = matches.find(f => f.id === favId);
-        if (!fav) { await interaction.editReply({ content: '❌ Erro ao remover.', components: [] }); return; }
-        await db.delete(favoritosTable).where(and(eq(favoritosTable.discordUserId, userId), eq(favoritosTable.id, favId)));
-        await interaction.editReply({ content: `🗑️ **${fav.title}** removido dos seus favoritos.`, components: [] });
-      });
-      collector?.on('end', async (_c, reason) => { if (reason === 'time') await interaction.editReply({ content: '⏱️ Tempo esgotado.', components: [] }); });
-    }
-  },
-};
+// /favorito — favoritos de manhwa e anime
+    const ANIME_SOURCES_SET = new Set(['anilist-anime', 'jikan', 'kitsu', 'anidb']);
+    const isAnimeFav = source => ANIME_SOURCES_SET.has(source);
 
+    const cmdFavorito = {
+    data: new SlashCommandBuilder()
+      .setName('favorito')
+      .setDescription('Gerencie seus favoritos de manhwa e anime')
+      .addSubcommandGroup(group =>
+        group.setName('adicionar').setDescription('Adiciona um título aos favoritos')
+          .addSubcommand(sub => sub.setName('manhwa').setDescription('Adiciona um manhwa aos favoritos')
+            .addStringOption(o => o.setName('titulo').setDescription('Nome do manhwa').setRequired(true).setAutocomplete(true)))
+          .addSubcommand(sub => sub.setName('anime').setDescription('Adiciona um anime aos favoritos')
+            .addStringOption(o => o.setName('titulo').setDescription('Nome do anime').setRequired(true).setAutocomplete(true)))
+      )
+      .addSubcommand(sub => sub.setName('listar').setDescription('Mostra todos os seus favoritos (manhwa e anime)'))
+      .addSubcommand(sub => sub.setName('remover').setDescription('Remove um título dos seus favoritos')
+        .addStringOption(o => o.setName('titulo').setDescription('Nome ou parte do título').setRequired(true))),
+
+    async autocomplete(interaction) {
+      const group   = interaction.options.getSubcommandGroup(false);
+      const focused = interaction.options.getFocused();
+      const mode    = (group === 'adicionar' && interaction.options.getSubcommand() === 'anime') ? 'anime' : 'manhwa';
+      await respondAutocomplete(interaction, focused, mode);
+    },
+
+    async execute(interaction) {
+      const userId = interaction.user.id;
+      const group  = interaction.options.getSubcommandGroup(false);
+      const sub    = interaction.options.getSubcommand();
+
+      // ── LISTAR ──
+      if (sub === 'listar') {
+        await interaction.deferReply({ ephemeral: true });
+        const lista = await db.select().from(favoritosTable)
+          .where(eq(favoritosTable.discordUserId, userId))
+          .orderBy(favoritosTable.addedAt);
+        if (!lista.length) {
+          await interaction.editReply({ content: '📭 Você ainda não tem favoritos! Use `/favorito adicionar manhwa` ou `/favorito adicionar anime`.' });
+          return;
+        }
+        const linhas = lista.map((fav, i) => {
+          const icon   = isAnimeFav(fav.source) ? '🎌' : (fav.source === 'anilist' ? '🟣' : '🟠');
+          const score  = fav.score  ? `⭐ ${fav.score}`                            : '⭐ N/A';
+          const genres = fav.genres ? fav.genres.split(',').slice(0, 2).join(', ') : '—';
+          return `**${i + 1}.** ${icon} [${fav.title}](${fav.siteUrl}) — ${score}\n> 🏷️ ${genres}`;
+        });
+        const manhwaCount = lista.filter(f => !isAnimeFav(f.source)).length;
+        const animeCount  = lista.filter(f =>  isAnimeFav(f.source)).length;
+        await interaction.editReply({ embeds: [
+          new EmbedBuilder()
+            .setTitle(`⭐ Favoritos de ${interaction.user.displayName}`)
+            .setDescription(linhas.join('\n\n'))
+            .setColor(15844367)
+            .setFooter({ text: `${manhwaCount} manhwa(s) • ${animeCount} anime(s)` }),
+        ]});
+
+      // ── ADICIONAR MANHWA ou ANIME ──
+      } else if (group === 'adicionar') {
+        const tipo  = sub; // 'manhwa' | 'anime'
+        const input = interaction.options.getString('titulo', true);
+        await interaction.deferReply({ ephemeral: true });
+
+        // Autocomplete selection: source:id format
+        if (input.includes(':')) {
+          const [source, ...idParts] = input.split(':');
+          const id             = idParts.join(':');
+          const validAnime     = ['anilist-anime', 'jikan', 'kitsu', 'anidb'];
+          const validManhwa    = ['anilist', 'mangadex', 'comick', 'mangaupdates'];
+          const validSources   = tipo === 'anime' ? validAnime : validManhwa;
+          if (validSources.includes(source)) {
+            const detail = await getUnifiedById(source, id).catch(() => null);
+            if (detail) {
+              const already = await db.select({ id: favoritosTable.id }).from(favoritosTable)
+                .where(and(eq(favoritosTable.discordUserId, userId), eq(favoritosTable.manhwaId, String(detail.id))))
+                .limit(1);
+              if (already.length) {
+                await interaction.editReply({ content: `⚠️ **${detail.mainTitle}** já está nos seus favoritos!` });
+                return;
+              }
+              await db.insert(favoritosTable).values({
+                discordUserId: userId, manhwaId: String(detail.id), source: detail.source,
+                title: detail.mainTitle, coverUrl: detail.coverUrl ?? null, siteUrl: detail.siteUrl,
+                genres: detail.genres?.join(',') ?? null,
+                score: detail.score ? (detail.score / 10).toFixed(1) : null,
+              });
+              const embed = new EmbedBuilder()
+                .setTitle(`✅ ${detail.mainTitle}`).setURL(detail.siteUrl)
+                .setDescription(`${tipo === 'anime' ? '🎌' : '📖'} Adicionado aos seus favoritos!`)
+                .setColor(15844367);
+              if (detail.coverUrl) embed.setThumbnail(detail.coverUrl);
+              await interaction.editReply({ embeds: [embed] });
+              return;
+            }
+          }
+        }
+
+        // Text search fallback
+        let results = [];
+        try { results = await searchAllSources(input, tipo); }
+        catch { await interaction.editReply('❌ Erro ao buscar. Tente novamente.'); return; }
+        if (!results.length) {
+          await interaction.editReply(`❌ Nenhum ${tipo === 'anime' ? 'anime' : 'manhwa'} encontrado para **${input}**.`);
+          return;
+        }
+        const existingIds = new Set(
+          (await db.select({ manhwaId: favoritosTable.manhwaId }).from(favoritosTable)
+            .where(eq(favoritosTable.discordUserId, userId))).map(r => r.manhwaId)
+        );
+        const available = results.filter(r => !existingIds.has(String(r.id)));
+        if (!available.length) { await interaction.editReply('⚠️ Todos os resultados já estão nos seus favoritos!'); return; }
+
+        const doInsert = async m => db.insert(favoritosTable).values({
+          discordUserId: userId, manhwaId: String(m.id), source: m.source,
+          title: m.mainTitle, coverUrl: m.coverUrl ?? null, siteUrl: m.siteUrl,
+          genres: m.genres?.join(',') ?? null,
+          score: m.score ? (m.score / 10).toFixed(1) : null,
+        });
+
+        if (available.length === 1) {
+          await doInsert(available[0]);
+          await interaction.editReply({ content: `✅ **${available[0].mainTitle}** adicionado aos seus favoritos!` });
+          return;
+        }
+        const options = available.slice(0, 8).map(r => ({
+          label:       r.mainTitle.slice(0, 100),
+          description: `${SOURCE_ICONS[r.source] ?? '🔵'} ${SOURCE_LABELS[r.source] ?? r.source} • ${r.genres?.slice(0, 2).join(', ') || 'Sem gêneros'}`.slice(0, 100),
+          value:       `${r.source}:${r.id}`,
+        }));
+        const row = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder().setCustomId('favorito_add_select')
+            .setPlaceholder(`Selecione o ${tipo === 'anime' ? 'anime' : 'manhwa'} para adicionar`)
+            .addOptions(options)
+        );
+        await interaction.editReply({
+          content: `🔍 Encontrei **${available.length}** resultados para **${input}**. Qual adicionar?`,
+          components: [row],
+        });
+        const collector = interaction.channel?.createMessageComponentCollector({
+          componentType: ComponentType.StringSelect,
+          filter: i => i.customId === 'favorito_add_select' && i.user.id === interaction.user.id,
+          time: 30000, max: 1,
+        });
+        collector?.on('collect', async sel => {
+          await sel.deferUpdate();
+          const [selSrc, ...selIdParts] = sel.values[0].split(':');
+          const detail = await getUnifiedById(selSrc, selIdParts.join(':')).catch(() => null);
+          const chosen = detail ?? available.find(r => String(r.id) === selIdParts.join(':'));
+          if (!chosen) { await interaction.editReply({ content: '❌ Erro ao obter detalhes.', components: [] }); return; }
+          await doInsert(chosen);
+          await interaction.editReply({ content: `✅ **${chosen.mainTitle}** adicionado aos seus favoritos!`, components: [] });
+        });
+        collector?.on('end', async (_c, reason) => {
+          if (reason === 'time') await interaction.editReply({ content: '⏱️ Tempo esgotado.', components: [] });
+        });
+
+      // ── REMOVER ──
+      } else if (sub === 'remover') {
+        const titulo = interaction.options.getString('titulo', true);
+        await interaction.deferReply({ ephemeral: true });
+        const matches = await db.select().from(favoritosTable)
+          .where(and(eq(favoritosTable.discordUserId, userId), sql`lower(${favoritosTable.title}) like lower(${'%' + titulo + '%'})`));
+        if (!matches.length) { await interaction.editReply(`❌ Nenhum favorito com **${titulo}** encontrado.`); return; }
+        if (matches.length === 1) {
+          await db.delete(favoritosTable).where(and(eq(favoritosTable.discordUserId, userId), eq(favoritosTable.id, matches[0].id)));
+          await interaction.editReply(`🗑️ **${matches[0].title}** removido dos seus favoritos.`);
+          return;
+        }
+        const options = matches.slice(0, 8).map(f => ({
+          label:       f.title.slice(0, 100),
+          description: `${isAnimeFav(f.source) ? '🎌 Anime' : '📖 Manhwa'} • ${(f.genres ?? '').split(',').slice(0, 2).join(', ') || 'Sem gêneros'}`.slice(0, 100),
+          value:       String(f.id),
+        }));
+        const row = new ActionRowBuilder().addComponents(
+          new StringSelectMenuBuilder().setCustomId('favorito_remove_select').setPlaceholder('Selecione qual remover').addOptions(options)
+        );
+        await interaction.editReply({ content: `⚠️ Encontrei **${matches.length}** favorito(s) com esse nome. Qual remover?`, components: [row] });
+        const collector = interaction.channel?.createMessageComponentCollector({
+          componentType: ComponentType.StringSelect,
+          filter: i => i.customId === 'favorito_remove_select' && i.user.id === interaction.user.id,
+          time: 30000, max: 1,
+        });
+        collector?.on('collect', async sel => {
+          await sel.deferUpdate();
+          const favId = parseInt(sel.values[0], 10);
+          const fav   = matches.find(f => f.id === favId);
+          if (!fav) { await interaction.editReply({ content: '❌ Erro ao remover.', components: [] }); return; }
+          await db.delete(favoritosTable).where(and(eq(favoritosTable.discordUserId, userId), eq(favoritosTable.id, favId)));
+          await interaction.editReply({ content: `🗑️ **${fav.title}** removido dos seus favoritos.`, components: [] });
+        });
+        collector?.on('end', async (_c, reason) => {
+          if (reason === 'time') await interaction.editReply({ content: '⏱️ Tempo esgotado.', components: [] });
+        });
+      }
+    },
+    };
+
+    
 // /versus — comparar manhwas
 const cmdVersus = {
   data: new SlashCommandBuilder().setName('versus').setDescription('Compara dois manhwas lado a lado para ajudar a decidir qual ler')
@@ -2287,7 +2395,7 @@ const commands = new Map([
   [cmdGuia.data.name,         cmdGuia],
   [cmdSurpresa.data.name,     cmdSurpresa],
   [cmdNovidades.data.name,    cmdNovidades],
-  [cmdCurtidas.data.name,     cmdCurtidas],
+  [cmdFavorito.data.name,      cmdFavorito],
   [cmdVersus.data.name,       cmdVersus],
   [cmdCriador.data.name,      cmdCriador],
   [cmdAlertas.data.name,      cmdAlertas],
@@ -2318,76 +2426,113 @@ async function deployCommands(clientId, token) {
 
 const CHECK_INTERVAL_MS = 2 * 60 * 60 * 1000;
 
-async function fetchChapters(manhwaId, source) {
-  if (source === 'anilist') {
-    try {
-      const res = await fetch(ANILIST_API, {
-        method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-        body: JSON.stringify({ query: `query($id:Int!){Media(id:$id,type:MANGA){chapters status title{english romaji}siteUrl coverImage{large color}}}`, variables: { id: parseInt(manhwaId, 10) } }),
-        signal: AbortSignal.timeout(8000),
-      });
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.data?.Media?.chapters ?? null;
-    } catch { return null; }
-  }
-  if (source === 'mangadex') {
-    try {
-      const params = new URLSearchParams({ manga: manhwaId, 'translatedLanguage[]': 'pt-br', limit: '1', 'order[chapter]': 'desc' });
-      const res = await fetch(`https://api.mangadex.org/chapter?${params}`, { signal: AbortSignal.timeout(8000) });
-      if (!res.ok) return null;
-      const json = await res.json();
-      if (!json.data?.length) return null;
-      const chap = json.data[0].attributes.chapter;
-      return chap ? parseFloat(chap) : json.total;
-    } catch { return null; }
-  }
-  return null;
-}
-
+async function fetchChapters(mediaId, source) {
+    if (source === 'anilist') {
+      try {
+        const res = await fetch(ANILIST_API, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ query: `query($id:Int!){Media(id:$id,type:MANGA){chapters status}}`, variables: { id: parseInt(mediaId, 10) } }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) return null;
+        const json = await res.json();
+        return json.data?.Media?.chapters ?? null;
+      } catch { return null; }
+    }
+    if (source === 'mangadex') {
+      try {
+        const params = new URLSearchParams({ manga: mediaId, 'translatedLanguage[]': 'pt-br', limit: '1', 'order[chapter]': 'desc' });
+        const res = await fetch(`https://api.mangadex.org/chapter?${params}`, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) return null;
+        const json = await res.json();
+        if (!json.data?.length) return null;
+        const chap = json.data[0].attributes.chapter;
+        return chap ? parseFloat(chap) : json.total;
+      } catch { return null; }
+    }
+    if (source === 'anilist-anime') {
+      try {
+        const res = await fetch(ANILIST_API, {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ query: `query($id:Int!){Media(id:$id,type:ANIME){episodes status}}`, variables: { id: parseInt(mediaId, 10) } }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) return null;
+        const json = await res.json();
+        return json.data?.Media?.episodes ?? null;
+      } catch { return null; }
+    }
+    if (source === 'jikan') {
+      try {
+        const res = await fetch(`https://api.jikan.moe/v4/anime/${encodeURIComponent(mediaId)}`, { signal: AbortSignal.timeout(8000) });
+        if (!res.ok) return null;
+        const json = await res.json();
+        return json.data?.episodes ?? null;
+      } catch { return null; }
+    }
+    if (source === 'kitsu') {
+      try {
+        const res = await fetch(`https://kitsu.app/api/edge/anime/${encodeURIComponent(mediaId)}`, {
+          headers: { Accept: 'application/vnd.api+json' }, signal: AbortSignal.timeout(8000),
+        });
+        if (!res.ok) return null;
+        const json = await res.json();
+        return json.data?.attributes?.episodeCount ?? null;
+      } catch { return null; }
+    }
+    return null;
+    }
+    
 async function runCheck(client) {
-  logger.info('Verificando atualizações de capítulos...');
-  const canais = await db.select().from(notificacaoCanaisTable);
-  if (!canais.length) return;
-  const favorites = await db.selectDistinctOn([favoritosTable.manhwaId], {
-    manhwaId: favoritosTable.manhwaId, source: favoritosTable.source, title: favoritosTable.title,
-    coverUrl: favoritosTable.coverUrl, siteUrl: favoritosTable.siteUrl,
-  }).from(favoritosTable);
-  if (!favorites.length) return;
-  for (const m of favorites) {
-    try {
-      const newChapters = await fetchChapters(m.manhwaId, m.source);
-      if (newChapters === null) continue;
-      const [existing] = await db.select().from(capitulosRastreados).where(eq(capitulosRastreados.manhwaId, m.manhwaId));
-      if (!existing) {
-        await db.insert(capitulosRastreados).values({ manhwaId: m.manhwaId, source: m.source, title: m.title, coverUrl: m.coverUrl, siteUrl: m.siteUrl, lastChapters: newChapters });
-        continue;
-      }
-      const lastChapters = existing.lastChapters ?? 0;
-      if (newChapters > lastChapters) {
-        logger.info({ title: m.title, lastChapters, newChapters }, 'Novos capítulos detectados!');
-        for (const canal of canais) {
-          try {
-            const channel = await client.channels.fetch(canal.channelId);
-            if (!channel || !(channel instanceof TextChannel)) continue;
-            const diff = Math.floor(newChapters) - Math.floor(lastChapters);
-            const embed = new EmbedBuilder().setTitle(`📬 Novo(s) Capítulo(s): ${m.title}`).setURL(m.siteUrl).setColor(3066993)
-              .setDescription(`**${diff > 0 ? diff : 'Alguns'}** novo(s) capítulo(s) disponível(eis)!\n\n📖 Total agora: **${Math.floor(newChapters)}** capítulos\n\n🔎 **Buscar nos sites BR:**\n${buildScanLinksExternal(m.title)}`)
-              .setFooter({ text: 'Notificação automática • Bot de Manhwa' });
-            if (m.coverUrl) embed.setThumbnail(m.coverUrl);
-            await channel.send({ embeds: [embed] });
-          } catch (err) { logger.error({ err, channelId: canal.channelId }, 'Erro ao enviar notificação'); }
+    logger.info('Verificando atualizações...');
+    const canais = await db.select().from(notificacaoCanaisTable);
+    if (!canais.length) return;
+    const favorites = await db.selectDistinctOn([favoritosTable.manhwaId], {
+      manhwaId: favoritosTable.manhwaId, source: favoritosTable.source, title: favoritosTable.title,
+      coverUrl: favoritosTable.coverUrl, siteUrl: favoritosTable.siteUrl,
+    }).from(favoritosTable);
+    if (!favorites.length) return;
+    for (const m of favorites) {
+      try {
+        const newCount = await fetchChapters(m.manhwaId, m.source);
+        if (newCount === null) continue;
+        const isAnime = ANIME_SOURCES_SET.has(m.source);
+        const [existing] = await db.select().from(capitulosRastreados).where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        if (!existing) {
+          await db.insert(capitulosRastreados).values({ manhwaId: m.manhwaId, source: m.source, title: m.title, coverUrl: m.coverUrl, siteUrl: m.siteUrl, lastChapters: newCount });
+          continue;
         }
-        await db.update(capitulosRastreados).set({ lastChapters: newChapters, lastChecked: sql`now()` }).where(eq(capitulosRastreados.manhwaId, m.manhwaId));
-      } else {
-        await db.update(capitulosRastreados).set({ lastChecked: sql`now()` }).where(eq(capitulosRastreados.manhwaId, m.manhwaId));
-      }
-      await new Promise(r => setTimeout(r, 500));
-    } catch (err) { logger.error({ err, manhwa: m.title }, 'Erro ao verificar capítulos'); }
-  }
-  logger.info('Verificação de capítulos concluída.');
-}
-
+        const lastCount = existing.lastChapters ?? 0;
+        if (newCount > lastCount) {
+          const diff   = Math.floor(newCount) - Math.floor(lastCount);
+          const unit   = isAnime ? 'Episódio(s)' : 'Capítulo(s)';
+          const unitLc = isAnime ? 'episódio(s)' : 'capítulo(s)';
+          const icon   = isAnime ? '🎌' : '📬';
+          logger.info({ title: m.title, lastCount, newCount }, `Novo(s) ${unitLc} detectado(s)!`);
+          for (const canal of canais) {
+            try {
+              const channel = await client.channels.fetch(canal.channelId);
+              if (!channel || !(channel instanceof TextChannel)) continue;
+              const extra = isAnime ? '' : `\n\n🔎 **Buscar nos sites BR:**\n${buildScanLinksExternal(m.title)}`;
+              const embed = new EmbedBuilder()
+                .setTitle(`${icon} Novo(s) ${unit}: ${m.title}`).setURL(m.siteUrl)
+                .setColor(isAnime ? 0x4169E1 : 3066993)
+                .setDescription(`**${diff > 0 ? diff : 'Alguns'}** novo(s) ${unitLc} disponível(eis)!\n\n📊 Total agora: **${Math.floor(newCount)}** ${unitLc}${extra}`)
+                .setFooter({ text: 'Notificação automática • Bot de Manhwa/Anime' });
+              if (m.coverUrl) embed.setThumbnail(m.coverUrl);
+              await channel.send({ embeds: [embed] });
+            } catch (err) { logger.error({ err, channelId: canal.channelId }, 'Erro ao enviar notificação'); }
+          }
+          await db.update(capitulosRastreados).set({ lastChapters: newCount, lastChecked: sql`now()` }).where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        } else {
+          await db.update(capitulosRastreados).set({ lastChecked: sql`now()` }).where(eq(capitulosRastreados.manhwaId, m.manhwaId));
+        }
+        await new Promise(r => setTimeout(r, 500));
+      } catch (err) { logger.error({ err, titulo: m.title }, 'Erro ao verificar atualização'); }
+    }
+    logger.info('Verificação concluída.');
+    }
+    
 function startNotificacaoService(client) {
   const runSafe = async () => { try { await runCheck(client); } catch (err) { logger.error({ err }, 'Erro no serviço de notificações'); } };
   setTimeout(runSafe, 60000);
